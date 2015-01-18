@@ -1,0 +1,67 @@
+#!/bin/sh
+
+FILE_PATH="`dirname \"$0\"`"
+# echo FILE_PATH=$FILE_PATH
+
+# Loading ipset modules
+lsmod | grep "ipt_set" > /dev/null 2>&1 || \
+for module in ip_set ip_set_nethash ip_set_iphash ipt_set
+do
+	insmod $module
+done
+
+# Preparing folder to cache downloaded files
+IPSET_LISTS_DIR=/tmp/mnt/SanDisk_Cruzer/ipset_lists
+echo "IPSET_LISTS_DIR=$IPSET_LISTS_DIR"
+
+[ -d "$IPSET_LISTS_DIR" ] || mkdir -p $IPSET_LISTS_DIR
+
+# Block traffic from Tor nodes
+if [ "$(ipset --swap TorNodes TorNodes 2>&1 | grep 'Unknown set')" != "" ]
+then
+    ipset -N TorNodes iphash
+    [ -e $IPSET_LISTS_DIR/tor.lst ] || wget -q -O $IPSET_LISTS_DIR/tor.lst http://torstatus.blutmagie.de/ip_list_all.php/Tor_ip_list_ALL.csv
+    for IP in $(cat $IPSET_LISTS_DIR/tor.lst)
+    do
+        ipset -A TorNodes $IP
+    done
+fi
+[ -z "$(iptables-save | grep TorNodes)" ] && iptables -I INPUT -m set --match-set TorNodes src -j logdrop
+
+for country in br cn af pk in ua ng kh li
+do
+	if [ "$(ipset --swap block_$country block_$country 2>&1 | grep 'Unknown set')" != "" ]
+	then
+		ipset -N block_$country nethash
+		[ -e ${IPSET_LISTS_DIR}/${country}.lst ] || wget -q -O ${IPSET_LISTS_DIR}/${country}.lst http://www.ipdeny.com/ipblocks/data/countries/${country}.zone
+		echo "Adding IPs to set: block_${country} ..."
+		for IP in $(cat ${IPSET_LISTS_DIR}/${country}.lst)
+		do
+			ipset -A block_$country $IP
+		done
+	fi
+	[ -z "$(iptables-save | grep block_$country)" ] && iptables -I INPUT -m set --match-set block_$country src -j DROP
+done
+
+# for country in br cn af pk in ua ng kh li; do iptables -I INPUT -m set --match-set block_$country src -j DROP; done
+# for country in br cn af pk in ua ng kh li; do ipset -L block_$country | grep -c ^[1-9]; done
+# nice ipset -L BluetackLevel1 | nice grep -c ^[1-9]
+
+iptables -I logdrop -p tcp -m state --state NEW -m limit --limit 1/minute --limit-burst 1 -j LOG --log-prefix "DROP " --log-tcp-sequence --log-tcp-options --log-ip-options
+
+exit 0
+
+# Block incoming traffic from some countries. cn and pk is for China and Pakistan. See other countries code at http://www.ipdeny.com/ipblocks/
+if [ "$(ipset --swap BlockedCountries BlockedCountries 2>&1 | grep 'Unknown set')" != "" ]
+then
+    ipset -N BlockedCountries nethash
+    for country in br cn af pk in ua ng kh li
+    do
+        [ -e $IPSET_LISTS_DIR/$country.lst ] || wget -q -O $IPSET_LISTS_DIR/$country.lst http://www.ipdeny.com/ipblocks/data/countries/$country.zone
+        for IP in $(cat $IPSET_LISTS_DIR/$country.lst)
+        do
+            ipset -A BlockedCountries $IP
+        done
+    done
+fi
+[ -z "$(iptables-save | grep BlockedCountries)" ] && iptables -I INPUT -m set --match-set BlockedCountries src -j DROP
