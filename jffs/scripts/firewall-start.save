@@ -12,67 +12,22 @@ done
 
 # Preparing folder to cache downloaded files
 IPSET_LISTS_DIR=/tmp/mnt/SanDisk_Cruzer/ipset_lists
-echo "IPSET_LISTS_DIR=$IPSET_LISTS_DIR"; echo
+echo "IPSET_LISTS_DIR=$IPSET_LISTS_DIR"
 
 [ -d "$IPSET_LISTS_DIR" ] || mkdir -p $IPSET_LISTS_DIR
-
-# Whitelist
-if [ "$(ipset --swap Whitelist Whitelist 2>&1 | grep 'Unknown set')" != "" ]
-then
-    echo "Adding Whitelist to ipset.."
-    ipset -N Whitelist nethash
-fi
-
-# cat /tmp/mnt/SanDisk_Cruzer/ipset_lists/Whitelist.lst
-COUNT=0
-for IP in $(cat ${IPSET_LISTS_DIR}/Whitelist.lst)
-do
-    ipset -A Whitelist $IP
-    COUNT=$(( $COUNT + 1 ))
-done
-echo "$COUNT Whitelist added to ipset.."; echo
-
-if [ -z "$(iptables-save | grep Whitelist)" ]
-then
-    echo "Insert Whitelist to iptables FORWARD chain, position 4.."; echo
-#   iptables -I INPUT 3 -m set --match-set Whitelist src -j ACCEPT
-   iptables -I FORWARD 3 -s 192.168.1.168/32 -d 192.168.1.60/32 -j ACCEPT 
-   iptables -I FORWARD 4 -m set --match-set Whitelist src -j ACCEPT
-else
-    echo "Whitelist exists in iptables FORWARD chain.. Skip Insert Whitelist to iptables FORWARD chain.. iptables --line-numbers -nvL FORWARD"; echo
-fi
-
-##[ -z "$(iptables-save | grep BluetackLevel2)" ] && iptables -I FORWARD -m set --match-set BluetackLevel1 src,dst -j DROP
 
 # Block traffic from Tor nodes
 if [ "$(ipset --swap TorNodes TorNodes 2>&1 | grep 'Unknown set')" != "" ]
 then
-    echo "Adding TorNodes to ipset.."
     ipset -N TorNodes iphash
     [ -e $IPSET_LISTS_DIR/tor.lst ] || wget -q -O $IPSET_LISTS_DIR/tor.lst http://torstatus.blutmagie.de/ip_list_all.php/Tor_ip_list_ALL.csv
-    COUNT=0
     for IP in $(cat $IPSET_LISTS_DIR/tor.lst)
     do
         ipset -A TorNodes $IP
-        COUNT=$(( $COUNT + 1 ))
     done
-    echo "$COUNT TorNodes added to ipset.."; echo
-    
-else
-    echo "ipset -L TorNodes exists.. Skipping TorNodes.."; echo
 fi
-# --insert  -I chain [rulenum]
-if [ -z "$(iptables-save | grep TorNodes)" ]
-then
-    echo "Insert TorNodes to iptables FORWARD chain, position 5 and 6 .."; echo
-#   iptables -I INPUT 4 -m set --match-set TorNodes src -j logdrop
-    iptables -I FORWARD 5 -d 192.168.1.60 -m set --match-set TorNodes src -j DROP
-    iptables -I FORWARD 6 -s 192.168.1.60 -m set --match-set TorNodes dst -j DROP
-else
-    echo "TorNodes exists in iptables INPUT chain.. Skip Insert TorNodes to iptables INPUT chain.. iptables --line-numbers -nvL INPUT"; echo
-fi
+[ -z "$(iptables-save | grep TorNodes)" ] && iptables -I INPUT -m set --match-set TorNodes src -j logdrop
 
-# Country blocklist
 for country in br cn af pk in ua ng kh li
 do
 	if [ "$(ipset --swap block_$country block_$country 2>&1 | grep 'Unknown set')" != "" ]
@@ -85,9 +40,7 @@ do
 			ipset -A block_$country $IP
 		done
 	fi
-#	[ -z "$(iptables-save | grep block_$country)" ] && iptables -I INPUT 4 -m set --match-set block_$country src -j DROP
-	[ -z "$(iptables-save | grep 'FORWARD -s 192.168.1.60/32 -m set --match-set block_${country} dst -j DROP')" ] && iptables -I FORWARD 7 -s 192.168.1.60 -m set --match-set block_$country dst -j DROP
-	[ -z "$(iptables-save | grep 'FORWARD -d 192.168.1.60/32 -m set --match-set block_${country} src -j DROP')" ] && iptables -I FORWARD 7 -d 192.168.1.60 -m set --match-set block_$country src -j DROP
+	[ -z "$(iptables-save | grep block_$country)" ] && iptables -I INPUT -m set --match-set block_$country src -j DROP
 done
 
 # for country in br cn af pk in ua ng kh li; do iptables -I INPUT -m set --match-set block_$country src -j DROP; done
@@ -97,6 +50,32 @@ done
 iptables -I logdrop -p tcp -m state --state NEW -m limit --limit 1/minute --limit-burst 1 -j LOG --log-prefix "DROP " --log-tcp-sequence --log-tcp-options --log-ip-options
 
 exit 0
+
+# Create the BluetackLevel1 (primary) if does not exists
+if [ "$(ipset --swap BluetackLevel1 BluetackLevel1 2>&1 | grep 'Unknown set')" != "" ]; then
+  ipset --create BluetackLevel1 iptreemap
+fi
+
+[ -z "$(iptables-save | grep BluetackLevel1)" ] && iptables -I FORWARD -m set --match-set BluetackLevel1 src,dst -j DROP
+
+# Destroy this transient set just in case
+ipset --destroy BluetackLevel2 > /dev/null 2>&1
+
+# Load the latest rule(s)
+
+TODAY=`date +"%Y%m%d"`
+
+(echo -e "-N BluetackLevel2 iptreemap\n" && \
+ nice wget -q -O - "http://list.iblocklist.com/?list=bt_level1&fileformat=p2p&archiveformat=gz" | \
+    nice gunzip | nice cut -d: -f2 | nice grep -E "^[-0-9.]+$" | \
+    nice sed 's/^/-A BluetackLevel2 /' && \
+ echo -e "\nCOMMIT\n" \
+) | \
+nice ipset --restore && \
+nice ipset --swap BluetackLevel2 BluetackLevel1 && \
+nice ipset --destroy BluetackLevel2
+nice ipset --save BluetackLevel1 > /tmp/mnt/SanDisk_Cruzer/ipset_lists/BluetackLevel1.ipset.$TODAY.bak 2>&1
+exit $?
 
 # Block incoming traffic from some countries. cn and pk is for China and Pakistan. See other countries code at http://www.ipdeny.com/ipblocks/
 if [ "$(ipset --swap BlockedCountries BlockedCountries 2>&1 | grep 'Unknown set')" != "" ]

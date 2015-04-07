@@ -20,8 +20,8 @@ fi
 # -d, --destination address[/mask][,...]
 #[ -z "$(iptables-save | grep BluetackLevel1)" ] && iptables -I FORWARD -s 192.168.1.60 -m set --match-set BluetackLevel1 dst -j DROP
 #[ -z "$(iptables-save | grep BluetackLevel1)" ] && iptables -I FORWARD -d 192.168.1.60 -m set --match-set BluetackLevel1 src -j DROP
-[ -z "$(iptables-save | grep 'FORWARD -s 192.168.1.60/32 -m set --match-set BluetackLevel1 dst -j DROP')" ] && iptables -I FORWARD -s 192.168.1.60 -m set --match-set BluetackLevel1 dst -j DROP
-[ -z "$(iptables-save | grep 'FORWARD -d 192.168.1.60/32 -m set --match-set BluetackLevel1 src -j DROP')" ] && iptables -I FORWARD -d 192.168.1.60 -m set --match-set BluetackLevel1 src -j DROP
+[ -z "$(iptables-save | grep 'FORWARD -s 192.168.1.60/32 -m set --match-set BluetackLevel1 dst -j DROP')" ] && iptables -I FORWARD 5 -s 192.168.1.60 -m set --match-set BluetackLevel1 dst -j DROP
+[ -z "$(iptables-save | grep 'FORWARD -d 192.168.1.60/32 -m set --match-set BluetackLevel1 src -j DROP')" ] && iptables -I FORWARD 5 -d 192.168.1.60 -m set --match-set BluetackLevel1 src -j DROP
 
 # Destroy this transient set just in case
 ipset --destroy BluetackLevel2 > /dev/null 2>&1
